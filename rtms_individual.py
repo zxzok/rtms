@@ -1,30 +1,29 @@
-import numpy as np
-import os
-import networkx as nx
+"""Individual-level RTMS analysis utilities."""
+
 import datetime
 import itertools
+import os
 import csv
-import random
-import ast
+
+import numpy as np
+import networkx as nx
+
 from AAL116_brain_area import brain_area_90
 from glasser360_brain_area import brain_area_360
 from power264_brain_area import brain_area_264
 
-def remove_prefix_suffix(s):
-    """
-    移除字符串s中的'ROICorrelation_FisherZ_'前缀和'.txt'后缀。
-    
-    参数:
-    s (str): 需要处理的原始字符串。
-    
-    返回:
-    str: 处理后的字符串。
-    """
-    # 去除前缀
-    without_prefix = s.replace("ROICorrelation_FisherZ_", "")
-    # 去除后缀
-    final_string = without_prefix[:-4] if without_prefix.endswith(".txt") else without_prefix
-    return final_string
+from rtms.common import (
+    remove_prefix_suffix,
+    matrix_preprocess,
+    matrix_abs,
+    group_average,
+    generate_network_with_threshold,
+    greedy_mds,
+    dominating_frequency,
+    read_sets,
+    save_frequency,
+    write_sets,
+)
 
 def save_to_txt(min_sets, times, data_type, root_dir, template_name, subject_name):
     # 构建路径：root_dir/template_name/data_type/subject_name/greedy_result
@@ -36,47 +35,6 @@ def save_to_txt(min_sets, times, data_type, root_dir, template_name, subject_nam
             f.write(f"Set {i+1}: {ds}\n")
     return filename
 
-def matrix_proprecess(matrix):
-    # #  去掉对角线
-    for i in range(0, matrix.shape[0]):
-        matrix[i,i] = 0
-    return matrix
-
-def matrix_abs(matrix):
-    # 权重取绝对值
-    for i in range(0, matrix.shape[0]):
-        for j in range(0, matrix.shape[1]):
-            if matrix[i,j] < 0:
-                matrix[i, j] = abs(matrix[i,j])
-    return matrix
-
-def matrix_group_average(data_path):
-    num = 0
-    all_matrix = []
-    for patient in list(os.walk(data_path))[0][2]:
-
-        patient_file_path = os.path.join(data_path, patient)
-        print("Loading:", patient_file_path)  # 打印文件路径
-
-        patient_data = np.loadtxt(patient_file_path)
-        matrix_data = np.array(patient_data)
-
-        # print("matrix_data:",matrix_data.shape)
-        # print("matrix_data:",matrix_data)
-
-        matrix = matrix_proprecess(matrix_data)
-        num += 1
-        if num == 1:
-            all_matrix = matrix
-        else:
-            all_matrix = all_matrix + matrix
-    average_matrix = all_matrix / num
-    # 先算组平均，再取绝对值
-    for i in range(0, average_matrix.shape[0]):
-        for j in range(0, average_matrix.shape[1]):
-            if average_matrix[i,j] < 0:
-                average_matrix[i, j] = abs(average_matrix[i,j])
-    return average_matrix
 
 
 def optimized_generate_percolation_net(matrix):
@@ -230,67 +188,7 @@ def all_min_dominating_set(nxG):
         print(str(datetime.datetime.now()))
     return min_dominating_set_result,strength_of_all_min_dominating_set
 
-# 贪心算法寻找最小支配集（输入参数：NetworkX 图对象 nxG、times 表示进行搜索的次数）
-def greedy_minimum_dominating_set(nxG, times):
-    min_dominating_set = []
 
-    for time in range(times):
-        nxG_copy = nxG.copy()
-        dominating_set = []
-
-        # 当 nxG_copy 中还有节点时，执行以下循环： 
-        # 1. 随机选择一个节点 node 加入到 dominating_set。 
-        # 2. 创建并清空一个列表 remove_list，将 node 添加进去。 
-        # 3. 遍历 node 的所有邻居，并将它们添加到 remove_list 中。
-        # 4. 将 remove_list 中的所有节点从 nxG_copy 中移除。
-        # 5. 重复步骤 1-4，直到 nxG_copy 中没有节点为止。
-
-        while nxG_copy.nodes():
-            node = random.choice(list(nxG_copy.nodes()))
-            dominating_set.append(node)
-            remove_list = []
-            remove_list.clear()
-            remove_list.append(node)
-            for neighbor in nxG_copy.neighbors(node):
-                remove_list.append(neighbor)
-                # # 这里remove list要set化，因为原来的节点中可能存在环，使得原来的list中有重复被删的节点
-                # remove_list_set = set(remove_list)
-
-            for node in remove_list:
-                if node in nxG_copy.nodes:
-                    nxG_copy.remove_node(node)
-        
-        # 如果当前 dominating_set 大小等于已知最小支配集大小但不在已知集合中，则将其添加到结果列表。 
-        # 如果当前 dominating_set 更小，则清空已知最小支配集列表，并将当前集合添加进去。
-        dominating_set = set(dominating_set)
-        if len(min_dominating_set) == 0:
-            min_dominating_set.append(dominating_set)
-        elif len(min_dominating_set[0]) == len(dominating_set) and dominating_set not in min_dominating_set:
-            min_dominating_set.append(dominating_set)
-        elif len(min_dominating_set[0]) > len(dominating_set):
-            min_dominating_set.clear()
-            min_dominating_set.append(dominating_set)
-        # print("times: " + str(time + 1))
-        # print("times: " + str(time + 1) +" MDSet size: "+ str(len(min_dominating_set[0]))+ " MDSet number: "+ str(len(min_dominating_set)) +"  MDSet: " + str(min_dominating_set))
-
-    return min_dominating_set
-
-def dominating_frequency(all_dom_set,nxG):
-    num_dom_set = len(all_dom_set)
-    node_num = nxG.number_of_nodes()
-    # init
-    as_dom_node_count = {}
-    for node_index in range(0,node_num):
-        as_dom_node_count[node_index] = 0
-    # count
-    for min_dom_set in all_dom_set:
-        for dom_node in min_dom_set:
-            as_dom_node_count[dom_node] = as_dom_node_count[dom_node] + 1
-
-    for node_index in as_dom_node_count:
-        as_dom_node_count[node_index] = as_dom_node_count[node_index] / num_dom_set
-    print(as_dom_node_count)
-    return as_dom_node_count
 
 # 整合贪心算法寻找的所有最小支配集
 def consolidate_and_save_results(data_type, root_dir, template_name, subject_name):
@@ -323,15 +221,6 @@ def consolidate_and_save_results(data_type, root_dir, template_name, subject_nam
             f.write(f"Set {index}: {set(set_items)}\n")
     return output_file
 
-def open_txt(path):
-    all_dom_set = []
-    with open(path, 'r') as f:
-        for line in f:
-            if line.startswith("Set "):
-                # 使用ast.literal_eval来安全地评估字符串中的集合
-                dom_set = ast.literal_eval(line.split(": ")[1])
-                all_dom_set.append(dom_set)
-        return all_dom_set
 
 def save_csv(df, data_type, root_dir, template_name, subject_name):
     # 构建路径：root_dir/template_name/data_type/subject_name/frequency
@@ -393,44 +282,6 @@ def replace_to_brainarea(input_csv_path, data_type, root_dir, template_name, sub
     print("替换完成,新的CSV文件已保存.")
     return output_csv_path
 
-def generate_network_with_fixed_threshold(matrix, threshold):
-    """
-    使用固定阈值生成网络
-    
-    参数:
-    matrix: 输入的连接矩阵
-    threshold: 固定的阈值值
-    
-    返回:
-    G: networkx图对象
-    thresholded_matrix: 应用阈值后的矩阵
-    threshold: 使用的阈值
-    """
-    import numpy as np
-    import networkx as nx
-    
-    n = matrix.shape[0]
-    abs_matrix = np.abs(matrix)  # 使用绝对值
-    
-    # 创建阈值化的矩阵
-    thresholded_matrix = np.zeros_like(abs_matrix)
-    
-    # 创建图对象
-    G = nx.Graph()
-    G.add_nodes_from(range(n))
-    
-    # 添加边（权重大于阈值的连接）
-    edge_list = []
-    for i in range(n):
-        for j in range(i+1, n):  # 无向图只需处理上三角矩阵
-            if abs_matrix[i, j] > threshold:
-                edge_list.append((i, j, {'weight': abs_matrix[i, j]}))
-                thresholded_matrix[i, j] = abs_matrix[i, j]
-                thresholded_matrix[j, i] = abs_matrix[i, j]  # 保持对称性
-    
-    G.add_edges_from(edge_list)
-    
-    return G, thresholded_matrix, threshold
 
 
 if __name__ == '__main__':
@@ -446,7 +297,7 @@ if __name__ == '__main__':
         # print("subject_name:",subject_name)
         # print("subject_path:",subject_path)
         patient_data = np.array(np.loadtxt(subject_path))
-        patient_data = matrix_abs(matrix_proprecess(patient_data))
+        patient_data = matrix_abs(matrix_preprocess(patient_data))
 
         # 根据模板名称判断是否需要截取矩阵
         if template_name.lower() == 'aal116':
@@ -455,14 +306,16 @@ if __name__ == '__main__':
         
         # 使用固定阈值建网
         print(f"-------使用固定阈值{fixed_threshold}建网--------")
-        nxG, matrix, used_threshold = generate_network_with_fixed_threshold(patient_data, fixed_threshold)
+        nxG, matrix, used_threshold = generate_network_with_threshold(
+            patient_data, fixed_threshold
+        )
         print(f"网络构建完成，使用的阈值: {used_threshold}")
 
         # 最小支配集分析   - 贪心 xxxxxx 次
         print("贪心算法寻找最小支配集:")
         for times in range(1000, 10001, 50000):
             # 运算得到结果
-            all_dom_set = greedy_minimum_dominating_set(nxG, times)
+            all_dom_set = greedy_mds(nxG, times)
             save_to_txt(all_dom_set, times, data_type, root_dir, template_name, subject_name)
         print("----贪心算法寻找结束----")
 
@@ -473,7 +326,7 @@ if __name__ == '__main__':
 
         # 节点支配频率
         print("--------节点支配频率---------- ")
-        dom_set = open_txt(consolidate_result_path)
+        dom_set = read_sets(consolidate_result_path)
         dom_frequency_result = dominating_frequency(dom_set,nxG)
 
         # 保存频率结果
@@ -481,3 +334,4 @@ if __name__ == '__main__':
 
         # 分析节点支配频率——从局部脑区分析差异变化
         replace_to_brainarea(dom_frequency_result_path, data_type, root_dir, template_name, subject_name)
+
