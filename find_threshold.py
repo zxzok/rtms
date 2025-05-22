@@ -1,7 +1,14 @@
+"""Determine percolation threshold for connectivity networks."""
 
 import os
 import numpy as np
 import networkx as nx
+
+from rtms.common import (
+    matrix_preprocess,
+    matrix_abs,
+    group_average,
+)
 
 def generate_percolation_net(matrix):
     import numpy as np
@@ -144,48 +151,13 @@ def optimized_generate_percolation_net(matrix):
     return G, best_matrix, critical_threshold
 
 
-def matrix_proprecess(matrix):
-    # 去掉对角线
-    for i in range(0, matrix.shape[0]):
-        matrix[i,i] = 0
-    return matrix
-
-def matrix_abs(matrix):
-    # 取绝对值
-    return np.abs(matrix)
-
-def matrix_group_average(data_path):
-    num = 0
-    all_matrix = []
-    for patient in list(os.walk(data_path))[0][2]:
-        patient_file_path = os.path.join(data_path, patient)
-        print("Loading:", patient_file_path)  # 打印文件路径
-
-        patient_data = np.loadtxt(patient_file_path)
-        matrix_data = np.array(patient_data)
-
-        matrix = matrix_proprecess(matrix_data)
-        num += 1
-        if num == 1:
-            all_matrix = matrix
-        else:
-            all_matrix = all_matrix + matrix
-    
-    average_matrix = all_matrix / num
-    
-    # 先算组平均，再取绝对值
-    for i in range(0, average_matrix.shape[0]):
-        for j in range(0, average_matrix.shape[1]):
-            if average_matrix[i,j] < 0:
-                average_matrix[i, j] = abs(average_matrix[i,j])
-    return average_matrix
 
 def main():
     data_path = "/home/user/zhangyan/dominating_set/data/power264/pre"
     
     # 计算组平均矩阵
     print("计算组平均FC矩阵...")
-    average_matrix = matrix_group_average(data_path)
+    average_matrix = group_average(data_path)
     
     # 计算图渗流网络并保存
     print("-------图渗流--------")
