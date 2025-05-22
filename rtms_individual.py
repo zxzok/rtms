@@ -1,30 +1,30 @@
-import numpy as np
-import os
-import networkx as nx
+"""Individual-level RTMS analysis utilities."""
+
 import datetime
 import itertools
-import csv
+import os
 import random
-import ast
+import csv
+
+import numpy as np
+import networkx as nx
+
 from AAL116_brain_area import brain_area_90
 from glasser360_brain_area import brain_area_360
 from power264_brain_area import brain_area_264
 
-def remove_prefix_suffix(s):
-    """
-    移除字符串s中的'ROICorrelation_FisherZ_'前缀和'.txt'后缀。
-    
-    参数:
-    s (str): 需要处理的原始字符串。
-    
-    返回:
-    str: 处理后的字符串。
-    """
-    # 去除前缀
-    without_prefix = s.replace("ROICorrelation_FisherZ_", "")
-    # 去除后缀
-    final_string = without_prefix[:-4] if without_prefix.endswith(".txt") else without_prefix
-    return final_string
+from rtms.common import (
+    remove_prefix_suffix,
+    matrix_preprocess,
+    matrix_abs,
+    group_average,
+    generate_network_with_threshold,
+    greedy_minimum_dominating_set,
+    dominating_frequency,
+    read_sets,
+    save_frequency,
+    write_sets,
+)
 
 def save_to_txt(min_sets, times, data_type, root_dir, template_name, subject_name):
     # 构建路径：root_dir/template_name/data_type/subject_name/greedy_result
@@ -36,47 +36,6 @@ def save_to_txt(min_sets, times, data_type, root_dir, template_name, subject_nam
             f.write(f"Set {i+1}: {ds}\n")
     return filename
 
-def matrix_proprecess(matrix):
-    # #  去掉对角线
-    for i in range(0, matrix.shape[0]):
-        matrix[i,i] = 0
-    return matrix
-
-def matrix_abs(matrix):
-    # 权重取绝对值
-    for i in range(0, matrix.shape[0]):
-        for j in range(0, matrix.shape[1]):
-            if matrix[i,j] < 0:
-                matrix[i, j] = abs(matrix[i,j])
-    return matrix
-
-def matrix_group_average(data_path):
-    num = 0
-    all_matrix = []
-    for patient in list(os.walk(data_path))[0][2]:
-
-        patient_file_path = os.path.join(data_path, patient)
-        print("Loading:", patient_file_path)  # 打印文件路径
-
-        patient_data = np.loadtxt(patient_file_path)
-        matrix_data = np.array(patient_data)
-
-        # print("matrix_data:",matrix_data.shape)
-        # print("matrix_data:",matrix_data)
-
-        matrix = matrix_proprecess(matrix_data)
-        num += 1
-        if num == 1:
-            all_matrix = matrix
-        else:
-            all_matrix = all_matrix + matrix
-    average_matrix = all_matrix / num
-    # 先算组平均，再取绝对值
-    for i in range(0, average_matrix.shape[0]):
-        for j in range(0, average_matrix.shape[1]):
-            if average_matrix[i,j] < 0:
-                average_matrix[i, j] = abs(average_matrix[i,j])
-    return average_matrix
 
 
 def optimized_generate_percolation_net(matrix):
@@ -323,15 +282,6 @@ def consolidate_and_save_results(data_type, root_dir, template_name, subject_nam
             f.write(f"Set {index}: {set(set_items)}\n")
     return output_file
 
-def open_txt(path):
-    all_dom_set = []
-    with open(path, 'r') as f:
-        for line in f:
-            if line.startswith("Set "):
-                # 使用ast.literal_eval来安全地评估字符串中的集合
-                dom_set = ast.literal_eval(line.split(": ")[1])
-                all_dom_set.append(dom_set)
-        return all_dom_set
 
 def save_csv(df, data_type, root_dir, template_name, subject_name):
     # 构建路径：root_dir/template_name/data_type/subject_name/frequency
@@ -393,44 +343,6 @@ def replace_to_brainarea(input_csv_path, data_type, root_dir, template_name, sub
     print("替换完成,新的CSV文件已保存.")
     return output_csv_path
 
-def generate_network_with_fixed_threshold(matrix, threshold):
-    """
-    使用固定阈值生成网络
-    
-    参数:
-    matrix: 输入的连接矩阵
-    threshold: 固定的阈值值
-    
-    返回:
-    G: networkx图对象
-    thresholded_matrix: 应用阈值后的矩阵
-    threshold: 使用的阈值
-    """
-    import numpy as np
-    import networkx as nx
-    
-    n = matrix.shape[0]
-    abs_matrix = np.abs(matrix)  # 使用绝对值
-    
-    # 创建阈值化的矩阵
-    thresholded_matrix = np.zeros_like(abs_matrix)
-    
-    # 创建图对象
-    G = nx.Graph()
-    G.add_nodes_from(range(n))
-    
-    # 添加边（权重大于阈值的连接）
-    edge_list = []
-    for i in range(n):
-        for j in range(i+1, n):  # 无向图只需处理上三角矩阵
-            if abs_matrix[i, j] > threshold:
-                edge_list.append((i, j, {'weight': abs_matrix[i, j]}))
-                thresholded_matrix[i, j] = abs_matrix[i, j]
-                thresholded_matrix[j, i] = abs_matrix[i, j]  # 保持对称性
-    
-    G.add_edges_from(edge_list)
-    
-    return G, thresholded_matrix, threshold
 
 
 if __name__ == '__main__':
@@ -446,7 +358,7 @@ if __name__ == '__main__':
         # print("subject_name:",subject_name)
         # print("subject_path:",subject_path)
         patient_data = np.array(np.loadtxt(subject_path))
-        patient_data = matrix_abs(matrix_proprecess(patient_data))
+        patient_data = matrix_abs(matrix_preprocess(patient_data))
 
         # 根据模板名称判断是否需要截取矩阵
         if template_name.lower() == 'aal116':
@@ -455,7 +367,9 @@ if __name__ == '__main__':
         
         # 使用固定阈值建网
         print(f"-------使用固定阈值{fixed_threshold}建网--------")
-        nxG, matrix, used_threshold = generate_network_with_fixed_threshold(patient_data, fixed_threshold)
+        nxG, matrix, used_threshold = generate_network_with_threshold(
+            patient_data, fixed_threshold
+        )
         print(f"网络构建完成，使用的阈值: {used_threshold}")
 
         # 最小支配集分析   - 贪心 xxxxxx 次
@@ -473,7 +387,7 @@ if __name__ == '__main__':
 
         # 节点支配频率
         print("--------节点支配频率---------- ")
-        dom_set = open_txt(consolidate_result_path)
+        dom_set = read_sets(consolidate_result_path)
         dom_frequency_result = dominating_frequency(dom_set,nxG)
 
         # 保存频率结果
@@ -481,3 +395,4 @@ if __name__ == '__main__':
 
         # 分析节点支配频率——从局部脑区分析差异变化
         replace_to_brainarea(dom_frequency_result_path, data_type, root_dir, template_name, subject_name)
+
